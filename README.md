@@ -2,12 +2,12 @@
 
 This repository contains the code that was used for the ePortfolio assignment for the Complex Systems course (academic year 2024-2025) created by group 6. The code files are named based on the entries/modules they are linked to.
 
-Project contributers:
-* Djourdan Johnson
-* Jacuqot Qiu
-* Lotte Michels
-* Nawat Nawati Azhati
-* Nuo Xu
-* Xuelin Wei
+Project contributers and task division:
+* Djourdan Johnson: ...
+* Jacuqot Qiu: ...
+* Lotte Michels: ...
+* Nawat Nawati Azhati: ...
+* Nuo Xu: ...
+* Xuelin Wei: ...
 
 
