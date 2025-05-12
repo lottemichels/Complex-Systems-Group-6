@@ -1,6 +1,6 @@
-# Complex Systems ePortfolio by Group 6 (Academic Year 2024-2025)
+# Info
 
-This repository contains the code that was used for the ePortfolio assignment for Complex Systems (2024-2025) by group 6. The code files are named based on the entries/modules they are linked to.
+This repository contains the code that was used for the ePortfolio assignment for the Complex Systems course (academic year 2024-2025) created by group 6. The code files are named based on the entries/modules they are linked to.
 
 Project contributers:
 * Djourdan Johnson
