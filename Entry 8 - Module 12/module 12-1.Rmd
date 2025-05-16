@@ -1,0 +1,306 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# 1. 安装和加载所需包
+# 安装依赖包（仅需运行一次）
+install.packages(c("dplyr", "lubridate", "tidyr", "pracma", "ggplot2"))
+
+# 加载包
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(pracma)
+library(ggplot2)
+
+# 验证包加载
+if (!require(dplyr)) stop("dplyr 包未安装，请运行 install.packages('dplyr')")
+if (!require(lubridate)) stop("lubridate 包未安装，请运行 install.packages('lubridate')")
+if (!require(pracma)) stop("pracma 包未安装，请运行 install.packages('pracma')")
+```
+
+
+
+```{r}
+# 2. 加载和预处理数据
+# 读取 CSV 文件
+file_path <- "/Users/nuoxu/Desktop/complex system group work/D1_sensor_data.csv"
+if (!file.exists(file_path)) {
+  stop("文件不存在，请检查路径：", file_path)
+}
+bee_df <- read.csv(file_path, stringsAsFactors = FALSE)
+
+# 检查数据前几行
+cat("数据前几行：\n")
+print(head(bee_df))
+
+# 转换列类型
+bee_df$temperature <- as.numeric(bee_df$temperature)
+bee_df$humidity <- as.numeric(bee_df$humidity)
+bee_df$hive_power <- as.numeric(bee_df$hive_power)
+bee_df$tag_number <- as.numeric(bee_df$tag_number)
+bee_df$published_at <- as.POSIXct(bee_df$published_at, format = "%Y-%m-%d %H:%M:%S+00:00", tz = "UTC")
+
+# 检查转换错误（NA 引入）
+cat("数据摘要：\n")
+print(summary(bee_df[, c("temperature", "humidity", "hive_power", "tag_number", "published_at")]))
+
+# 过滤蜂箱 202204
+hive_data <- bee_df %>%
+  dplyr::filter(tag_number == 202204) %>%
+  dplyr::select(published_at, temperature, humidity, hive_power)
+
+# 检查过滤后数据量
+cat("蜂箱 202204 初始包含", nrow(hive_data), "条记录\n")
+
+# 去重基于 published_at
+hive_data <- hive_data %>%
+  dplyr::distinct(published_at, .keep_all = TRUE)
+
+# 检查去重后数据量和时间范围
+cat("蜂箱 202204 去重后包含", nrow(hive_data), "条记录\n")
+print(range(hive_data$published_at, na.rm = TRUE))
+
+# 删除缺失值
+hive_data <- na.omit(hive_data)
+
+# 按时间排序
+hive_data <- hive_data %>% dplyr::arrange(published_at)
+
+# 子采样：每小时取一个数据点（均值）
+hive_data <- hive_data %>%
+  dplyr::mutate(hour = lubridate::floor_date(published_at, unit = "hour")) %>%
+  dplyr::group_by(hour) %>%
+  dplyr::summarise(temperature = mean(temperature, na.rm = TRUE),
+                   humidity = mean(humidity, na.rm = TRUE),
+                   hive_power = mean(hive_power, na.rm = TRUE)) %>%
+  dplyr::rename(published_at = hour)
+```
+
+
+```{r}
+# 3. 按月分组
+hive_data <- hive_data %>%
+  dplyr::mutate(month = format(published_at, "%Y-%m"))
+
+# 检查每月记录数
+cat("每月记录数：\n")
+hive_data %>%
+  dplyr::group_by(month) %>%
+  dplyr::summarise(count = n()) %>%
+  print()
+```
+
+
+```{r}
+# 4. 熵计算
+# 初始化结果数据框
+results <- data.frame(
+  Month = character(),
+  Temp_Shannon = numeric(), Humid_Shannon = numeric(), Power_Shannon = numeric(),
+  Temp_ApEn = numeric(), Humid_ApEn = numeric(), Power_ApEn = numeric(),
+  Temp_SampEn = numeric(), Humid_SampEn = numeric(), Power_SampEn = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Shannon Entropy 函数
+entropy <- function(x) {
+  probs <- table(x) / length(x)
+  vec <- as.data.frame(probs)[, 2]
+  vec <- vec[vec > 0]
+  -sum(vec * log2(vec))
+}
+
+# ApEn 函数（近似实现，基于课程 Page 19）
+approx_entropy <- function(x, edim = 2, r = 0.2 * sd(x, na.rm = TRUE)) {
+  x <- (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)
+  x <- x[!is.na(x)]  # 移除 NA
+  N <- length(x)
+  if (N < edim + 1) return(NA)  # 数据不足
+  m <- edim
+  r <- r
+  
+  count_matches <- function(m) {
+    matches <- 0
+    for (i in 1:(N - m + 1)) {
+      template <- x[i:(i + m - 1)]
+      count <- 0
+      for (j in 1:(N - m + 1)) {
+        if (i != j) {
+          if (all(abs(x[j:(j + m - 1)] - template) <= r)) {
+            count <- count + 1
+          }
+        }
+      }
+      matches <- matches + log(max(count, 1) / (N - m))  # 避免 log(0)
+    }
+    return(-matches / (N - m + 1))
+  }
+  
+  phi_m <- count_matches(m)
+  phi_m1 <- count_matches(m + 1)
+  return(phi_m - phi_m1)
+}
+
+# 按月循环计算熵
+months <- unique(hive_data$month)
+for (mon in months) {
+  # 提取当月数据
+  month_data <- hive_data %>% dplyr::filter(month == mon)
+  
+  # 检查当月数据量
+  cat("处理月份", mon, "，记录数：", nrow(month_data), "\n")
+  
+  # Shannon Entropy（全数据）
+  month_data <- month_data %>%
+    dplyr::mutate(temp_binned = cut(temperature, breaks = 10, include.lowest = TRUE),
+                  humid_binned = cut(humidity, breaks = 10, include.lowest = TRUE),
+                  power_binned = cut(hive_power, breaks = 10, include.lowest = TRUE))
+  
+  temp_shannon <- if (nrow(month_data) > 0) entropy(month_data$temp_binned) else NA
+  humid_shannon <- if (nrow(month_data) > 0) entropy(month_data$humid_binned) else NA
+  power_shannon <- if (nrow(month_data) > 0) entropy(month_data$power_binned) else NA
+  
+  # 标准化数据（用于 ApEn 和 SampEn）
+  month_data <- month_data %>%
+    dplyr::mutate(temp_norm = (temperature - mean(temperature, na.rm = TRUE)) / sd(temperature, na.rm = TRUE),
+                  humid_norm = (humidity - mean(humidity, na.rm = TRUE)) / sd(humidity, na.rm = TRUE),
+                  power_norm = (hive_power - mean(hive_power, na.rm = TRUE)) / sd(hive_power, na.rm = TRUE))
+  
+  # ApEn 和 SampEn（前 500 点）
+  max_points <- min(500, nrow(month_data))
+  temp_apen <- if (max_points >= 10) approx_entropy(month_data$temp_norm[1:max_points], edim = 2, r = 0.2 * sd(month_data$temp_norm, na.rm = TRUE)) else NA
+  humid_apen <- if (max_points >= 10) approx_entropy(month_data$humid_norm[1:max_points], edim = 2, r = 0.2 * sd(month_data$humid_norm, na.rm = TRUE)) else NA
+  power_apen <- if (max_points >= 10) approx_entropy(month_data$power_norm[1:max_points], edim = 2, r = 0.2 * sd(month_data$power_norm, na.rm = TRUE)) else NA
+  
+  temp_sampen <- if (max_points >= 10) sample_entropy(month_data$temp_norm[1:max_points], edim = 2, r = 0.2 * sd(month_data$temp_norm, na.rm = TRUE), tau = 1) else NA
+  humid_sampen <- if (max_points >= 10) sample_entropy(month_data$humid_norm[1:max_points], edim = 2, r = 0.2 * sd(month_data$humid_norm, na.rm = TRUE), tau = 1) else NA
+  power_sampen <- if (max_points >= 10) sample_entropy(month_data$power_norm[1:max_points], edim = 2, r = 0.2 * sd(month_data$power_norm, na.rm = TRUE), tau = 1) else NA
+  
+  # 存储结果
+  results <- rbind(results, data.frame(
+    Month = mon,
+    Temp_Shannon = temp_shannon, Humid_Shannon = humid_shannon, Power_Shannon = power_shannon,
+    Temp_ApEn = temp_apen, Humid_ApEn = humid_apen, Power_ApEn = power_apen,
+    Temp_SampEn = temp_sampen, Humid_SampEn = humid_sampen, Power_SampEn = power_sampen
+  ))
+}
+
+# 打印结果
+cat("熵分析结果：\n")
+print(results)
+
+# 保存结果到 CSV
+write.csv(results, "entropy_results_202204.csv", row.names = FALSE)
+```
+
+
+```{r}
+# 5. 可视化
+# 确保月份按时间排序
+results$Month <- factor(results$Month, levels = sort(unique(results$Month)))
+
+# Shannon Entropy 图
+ggplot(results, aes(x = Month, y = Temp_Shannon, group = 1)) +
+  geom_line(color = "blue") +
+  geom_point(color = "blue") +
+  labs(title = "Shannon Entropy for Temperature (Hive 202204)", y = "Shannon Entropy (bits)", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("shannon_temp_202204.png")
+
+ggplot(results, aes(x = Month, y = Humid_Shannon, group = 1)) +
+  geom_line(color = "green") +
+  geom_point(color = "green") +
+  labs(title = "Shannon Entropy for Humidity (Hive 202204)", y = "Shannon Entropy (bits)", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("shannon_humid_202204.png")
+
+ggplot(results, aes(x = Month, y = Power_Shannon, group = 1)) +
+  geom_line(color = "red") +
+  geom_point(color = "red") +
+  labs(title = "Shannon Entropy for Hive Power (Hive 202204)", y = "Shannon Entropy (bits)", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("shannon_power_202204.png")
+
+# ApEn 图
+ggplot(results, aes(x = Month, y = Temp_ApEn, group = 1)) +
+  geom_line(color = "blue") +
+  geom_point(color = "blue") +
+  labs(title = "Approximate Entropy for Temperature (Hive 202204)", y = "ApEn", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("apen_temp_202204.png")
+
+ggplot(results, aes(x = Month, y = Humid_ApEn, group = 1)) +
+  geom_line(color = "green") +
+  geom_point(color = "green") +
+  labs(title = "Approximate Entropy for Humidity (Hive 202204)", y = "ApEn", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("apen_humid_202204.png")
+
+ggplot(results, aes(x = Month, y = Power_ApEn, group = 1)) +
+  geom_line(color = "red") +
+  geom_point(color = "red") +
+  labs(title = "Approximate Entropy for Hive Power (Hive 202204)", y = "ApEn", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("apen_power_202204.png")
+
+# SampEn 图
+ggplot(results, aes(x = Month, y = Temp_SampEn, group = 1)) +
+  geom_line(color = "blue") +
+  geom_point(color = "blue") +
+  labs(title = "Sample Entropy for Temperature (Hive 202204)", y = "SampEn", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("sampen_temp_202204.png")
+
+ggplot(results, aes(x = Month, y = Humid_SampEn, group = 1)) +
+  geom_line(color = "green") +
+  geom_point(color = "green") +
+  labs(title = "Sample Entropy for Humidity (Hive 202204)", y = "SampEn", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("sampen_humid_202204.png")
+
+ggplot(results, aes(x = Month, y = Power_SampEn, group = 1)) +
+  geom_line(color = "red") +
+  geom_point(color = "red") +
+  labs(title = "Sample Entropy for Hive Power (Hive 202204)", y = "SampEn", x = "Month") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("sampen_power_202204.png")
+```
+
+
+```{r}
+```
+
+
+```{r}
+# 6. 时间序列图（辅助解释）
+ggplot(hive_data, aes(x = published_at)) +
+  geom_line(aes(y = temperature, color = "Temperature")) +
+  geom_line(aes(y = humidity, color = "Humidity")) +
+  geom_line(aes(y = hive_power, color = "Hive Power")) +
+  labs(title = "Time Series for Hive 202204 (Hourly)", y = "Value", x = "Date") +
+  theme_minimal()
+ggsave("timeseries_202204.png")
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
