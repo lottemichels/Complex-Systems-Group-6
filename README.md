@@ -1,6 +1,6 @@
 # Information
 
-This repository contains the code that was used for the ePortfolio assignment for the Complex Systems course (academic year 2024-2025) created by Group 6. The folders are named based on the entries/modules they are linked to.
+This repository contains the code and the entries that make up the ePortfolio assignment for the Complex Systems course (academic year 2024-2025) created by Group 6. We investigated the dynamics inside a honeybee colony over a total of 8 sub-reports. The folders are named based on the entries/modules they are linked to. Each folder contains the code and report for their respective entry/module.
 
 Project contributers and their executed tasks:
 * **Djourdan Johnson**: _writing_ Module 10
