@@ -1,0 +1,617 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+1. clean the data
+
+```{r}
+# Load required packages
+library(dplyr)
+library(nonlinearTseries)
+library(tseriesChaos)
+library(plot3D)
+library(scatterplot3d)
+library(rgl)
+library(ggplot2)
+library(Hmisc)
+options(scipen = 999)  # Turn off scientific notation
+
+# Define file path
+file_path <- "/Users/nuoxu/Desktop/complex system group work/D1_sensor_data.csv"
+
+# Check if file exists
+if (!file.exists(file_path)) {
+  stop("File does not exist, please check the path: ", file_path)
+}
+
+# Load data
+bee_df <- read.csv(file_path, stringsAsFactors = FALSE)
+
+# Preview the first few rows
+cat("First few rows of the data:\n")
+print(head(bee_df))
+
+# Convert columns to appropriate types
+bee_df$temperature <- as.numeric(bee_df$temperature)
+bee_df$humidity <- as.numeric(bee_df$humidity)
+bee_df$hive_power <- as.numeric(bee_df$hive_power)
+bee_df$tag_number <- as.numeric(bee_df$tag_number)
+bee_df$published_at <- as.POSIXct(bee_df$published_at, format = "%Y-%m-%d %H:%M:%S+00:00", tz = "UTC")
+
+# Check for NAs introduced during conversion
+cat("Data summary after conversion:\n")
+print(summary(bee_df[, c("temperature", "humidity", "hive_power", "tag_number", "published_at")]))
+
+# Filter for hive 202204
+hive_data <- bee_df %>%
+  dplyr::filter(tag_number == 202204) %>%
+  dplyr::select(published_at, temperature, humidity, hive_power)
+
+cat("Initial number of records for hive 202204: ", nrow(hive_data), "\n")
+
+# Remove duplicates based on published_at
+hive_data <- hive_data %>%
+  dplyr::distinct(published_at, .keep_all = TRUE)
+
+cat("Number of records after removing duplicates: ", nrow(hive_data), "\n")
+cat("Time range of the data:\n")
+print(range(hive_data$published_at, na.rm = TRUE))
+
+# Remove missing values
+hive_data <- na.omit(hive_data)
+
+# Sort by timestamp
+hive_data <- hive_data %>% dplyr::arrange(published_at)
+
+# Subsampling: Reduce from ~8000 to ~1000 points by taking every 8th point
+subsample_idx <- seq(1, nrow(hive_data), by = 8)
+hive_data <- hive_data[subsample_idx, ]
+
+# Extract variables
+temperature <- hive_data$temperature
+humidity <- hive_data$humidity
+hive_power <- hive_data$hive_power
+
+cat("Data length after subsampling: ", length(temperature), "\n")
+cat("Subsampling reduces computational load but may lose high-frequency dynamics.\n")
+cat("We sample every 8th point (~12.5% of data) to retain main dynamic features.\n")
+```
+
+2. plots
+```{r}
+# Exploratory Visualizations (Before Phase Space Reconstruction)
+
+# 1. Time Series Plot for temperature, humidity, and hive_power
+plot(temperature, type = "l", col = "blue", xlab = "Time", ylab = "Value", 
+     main = "Time Series of Temperature, Humidity, and Hive Power")
+lines(humidity, col = "green")
+lines(hive_power, col = "red")
+legend("topright", legend = c("Temperature (°C)", "Humidity (%)", "Hive Power"), 
+       col = c("blue", "green", "red"), lty = 1)
+
+# 2. Pairwise X-Y Plots to explore relationships between variables
+# Temperature vs Humidity
+plot(temperature, humidity, type = "p", col = "purple", 
+     xlab = "Temperature (°C)", ylab = "Humidity (%)", 
+     main = "Temperature vs Humidity")
+
+# Temperature vs Hive Power
+plot(temperature, hive_power, type = "p", col = "orange", 
+     xlab = "Temperature (°C)", ylab = "Hive Power", 
+     main = "Temperature vs Hive Power")
+
+# Humidity vs Hive Power
+plot(humidity, hive_power, type = "p", col = "brown", 
+     xlab = "Humidity (%)", ylab = "Hive Power", 
+     main = "Humidity vs Hive Power")
+
+# 3. Change Time Series (Velocity) Plots
+# Calculate change (first-order difference) for each variable
+hive_data$temp_lag1 <- Lag(hive_data$temperature, 1)
+hive_data$temp_lead1 <- Lag(hive_data$temperature, -1)
+hive_data$temp_change <- (hive_data$temp_lead1 - hive_data$temp_lag1) / 2
+
+hive_data$humidity_lag1 <- Lag(hive_data$humidity, 1)
+hive_data$humidity_lead1 <- Lag(hive_data$humidity, -1)
+hive_data$humidity_change <- (hive_data$humidity_lead1 - hive_data$humidity_lag1) / 2
+
+hive_data$hive_power_lag1 <- Lag(hive_data$hive_power, 1)
+hive_data$hive_power_lead1 <- Lag(hive_data$hive_power, -1)
+hive_data$hive_power_change <- (hive_data$hive_power_lead1 - hive_data$hive_power_lag1) / 2
+
+# Plot change time series
+plot(hive_data$temp_change, type = "l", col = "blue", 
+     xlab = "Time", ylab = "Change in Value", 
+     main = "Change Time Series of Temperature, Humidity, and Hive Power")
+lines(hive_data$humidity_change, col = "green")
+lines(hive_data$hive_power_change, col = "red")
+legend("topright", legend = c("Temperature Change", "Humidity Change", "Hive Power Change"), 
+       col = c("blue", "green", "red"), lty = 1)
+
+# 4. Vector Field with Density Plot (Temperature vs Humidity vs humidity)
+# Ensure change variables are calculated (if not already done)
+hive_data$temp_lag1 <- Lag(hive_data$temperature, 1)
+hive_data$temp_lead1 <- Lag(hive_data$temperature, -1)
+hive_data$temp_change <- (hive_data$temp_lead1 - hive_data$temp_lag1) / 2
+
+hive_data$humidity_lag1 <- Lag(hive_data$humidity, 1)
+hive_data$humidity_lead1 <- Lag(hive_data$humidity, -1)
+hive_data$humidity_change <- (hive_data$humidity_lead1 - hive_data$humidity_lag1) / 2
+
+hive_data$hive_power_lag1 <- Lag(hive_data$hive_power, 1)
+hive_data$hive_power_lead1 <- Lag(hive_data$hive_power, -1)
+hive_data$hive_power_change <- (hive_data$hive_power_lead1 - hive_data$hive_power_lag1) / 2
+
+# Remove NAs introduced by lagging
+hive_data <- na.omit(hive_data)
+
+# Calculate change magnitude as a proxy for density
+change_magnitude <- sqrt(hive_data$temp_change^2 + hive_data$humidity_change^2 + hive_data$hive_power_change^2)
+
+# Normalize change magnitude to map to a color gradient
+density_colors <- (change_magnitude - min(change_magnitude)) / (max(change_magnitude) - min(change_magnitude))
+# Map to a color gradient (e.g., from blue to red)
+colors <- colorRampPalette(c("blue", "red"))(100)
+point_colors <- colors[as.integer(density_colors * 99) + 1]
+
+# 3D Plot with vector field and density (using color to represent density)
+plot3d(hive_data$temperature, hive_data$humidity, hive_data$hive_power, 
+       col = point_colors, size = 1,  # Fixed size for all points
+       xlab = "Temperature (°C)", ylab = "Humidity (%)", zlab = "Hive Power", 
+       main = "Vector Field and Density Plot (Temp vs Humidity vs Hive Power)")
+
+# Add line segments to represent the vector field using segments3d
+for (i in 1:nrow(hive_data)) {
+  segments3d(x = c(hive_data$temperature[i], hive_data$temperature[i] + hive_data$temp_change[i]),
+             y = c(hive_data$humidity[i], hive_data$humidity[i] + hive_data$humidity_change[i]),
+             z = c(hive_data$hive_power[i], hive_data$hive_power[i] + hive_data$hive_power_change[i]),
+             col = "black", lwd = 1)
+}
+```
+
+
+```{r}
+# Modified function to diagnose and fix the NA issue for humidity
+perform_phase_space_reconstruction_humidity <- function(data, var_name) {
+  # Step 1: Check data characteristics
+  cat("Summary of ", var_name, " data:\n")
+  print(summary(data))
+  cat("Standard deviation of ", var_name, ":", sd(data), "\n")
+  cat("Variance of ", var_name, ":", var(data), "\n")
+  if (any(is.na(data))) stop("Data contains NA values, please clean the data.")
+  if (sd(data) == 0) stop("Data has zero variance, cannot perform phase space reconstruction.")
+
+  # Plot the time series to inspect its behavior
+  plot(data, type = "l", col = "green", xlab = "Time", ylab = "Humidity (%)", 
+       main = "Time Series of Humidity")
+
+  # Plot histogram to inspect distribution
+  hist(data, breaks = 30, col = "lightgreen", xlab = "Humidity (%)", 
+       main = "Histogram of Humidity")
+
+  # Calculate standard deviation for parameter setting
+  sd_data <- sd(data)
+  if (is.na(sd_data) || sd_data == 0) sd_data <- (max(data) - min(data)) / 4
+
+  # Step 2: Determine time delay (tau) using ACF and AMI
+  tau_acf <- find_acf_local_min(data, lag.max = 100)
+  plot(acf(data, lag.max = 100, plot = FALSE), type = "h", main = paste("ACF Plot for", var_name))
+  abline(h = 0.2, col = "red", lty = 2)
+
+  tau_ami <- timeLag(data, technique = "ami", lag.max = 100, do.plot = TRUE)
+  if (inherits(tau_ami, "try-error")) tau_ami <- tau_acf + 2
+
+  cat("For ", var_name, ":\n")
+  cat("ACF-based tau:", tau_acf, "\nAMI-based tau:", tau_ami, "\n")
+  cat("We choose AMI-based tau (", tau_ami, ") as it is more suitable for nonlinear systems (Wiltshire, 2025).\n")
+  tau <- tau_ami
+
+  # Step 3: Try different tau values to estimate M
+  tau_candidates <- c(tau_ami, tau_acf, 5)  # Test AMI tau, ACF tau, and a smaller tau (5)
+  emb_dim <- NA
+  for (t in tau_candidates) {
+    cat("Trying tau =", t, "to estimate M...\n")
+    emb_dim_temp <- estimateEmbeddingDim(data, time.lag = t, max.embedding.dim = 15, do.plot = TRUE)
+    if (!is.na(emb_dim_temp)) {
+      emb_dim <- emb_dim_temp
+      tau <- t
+      cat("Found valid M =", emb_dim, "with tau =", t, "\n")
+      break
+    }
+  }
+
+  # If still NA, set a default M
+  if (is.na(emb_dim)) {
+    cat("Warning: estimateEmbeddingDim returned NA for ", var_name, " with all tested tau values.\n")
+    cat("Possible reasons: data may be too smooth, random, or noisy.\n")
+    cat("Setting default M = 3.\n")
+    emb_dim <- 3
+  }
+  M <- max(emb_dim, 3)
+  cat("Final tau for ", var_name, ":", tau, "\n")
+  cat("Estimated M for ", var_name, ":", emb_dim, "\n")
+  cat("We choose M =", M, "for phase space reconstruction.\n")
+
+  # Step 4: Reconstruct phase space
+  takens <- buildTakens(data, embedding.dim = M, time.lag = tau)
+  cat("Dimensions of reconstructed phase space for ", var_name, ":", dim(takens), "\n")
+
+  # Step 5: Visualize the phase space
+  if (ncol(takens) >= 3) {
+    scatterplot3d(takens[, 1], takens[, 2], takens[, 3], 
+                  color.symbols = "blue", 
+                  xlab = paste(var_name, "(t)"), 
+                  ylab = paste(var_name, "(t+tau)"), 
+                  zlab = paste(var_name, "(t+2tau)"), 
+                  main = paste(var_name, "Phase Space"))
+    # Interactive 3D plot
+    plot3d(takens[, 1], takens[, 2], takens[, 3], 
+           col = "blue", size = 0.5, main = paste("Interactive", var_name, "Phase Space"))
+  } else {
+    plot(takens[, 1], takens[, 2], type = "l", col = "blue", 
+         xlab = paste(var_name, "(t)"), ylab = paste(var_name, "(t+tau)"), 
+         main = paste(var_name, "Phase Space (2D)"))
+  }
+
+  # Step 6: Calculate correlation dimension
+  corr_dim_obj <- corrDim(data, min.embedding.dim = M, max.embedding.dim = M, 
+                          time.lag = tau, min.radius = sd_data / 50, 
+                          max.radius = sd_data / 2, n.points = 10)
+  corr_dim <- estimate(corr_dim_obj)
+
+  # Step 7: Surrogate data analysis for robustness
+  set.seed(123)
+  surrogate_data <- sample(data, length(data), replace = FALSE)
+  corr_dim_surrogate_obj <- corrDim(surrogate_data, min.embedding.dim = M, max.embedding.dim = M, 
+                                    time.lag = tau, min.radius = sd_data / 50, 
+                                    max.radius = sd_data / 2, n.points = 10)
+  corr_dim_surrogate <- estimate(corr_dim_surrogate_obj)
+
+  cat("Correlation Dimension for ", var_name, ":", corr_dim, "\n")
+  cat("Correlation Dimension for surrogate data:", corr_dim_surrogate, "\n")
+  cat("If the original correlation dimension is significantly lower than the surrogate, the result is more robust (Module 7).\n")
+
+  return(list(tau = tau, M = M, takens = takens, corr_dim = corr_dim, corr_dim_surrogate = corr_dim_surrogate))
+}
+
+# Perform phase space reconstruction for humidity with diagnostic steps
+humidity_result <- perform_phase_space_reconstruction_humidity(humidity, "Humidity")
+```
+
+
+
+
+3. Reconstruction for temporary, humidity and hive power
+```{r}
+# Helper function to find the first local minimum of ACF
+find_acf_local_min <- function(ts, lag.max) {
+  acf_vals <- acf(ts, lag.max = lag.max, plot = FALSE)$acf[-1]
+  for (i in 2:(length(acf_vals) - 1)) {
+    if (acf_vals[i] < acf_vals[i - 1] && acf_vals[i] < acf_vals[i + 1]) {
+      return(i)
+    }
+  }
+  below_threshold <- which(acf_vals < 0.2)
+  if (length(below_threshold) > 0) {
+    return(min(below_threshold))
+  }
+  return(lag.max / 2)
+}
+
+# Function to perform phase space reconstruction for a single variable
+perform_phase_space_reconstruction <- function(data, var_name) {
+  # Check data for potential issues
+  cat("Summary of ", var_name, " data:\n")
+  print(summary(data))
+  cat("Standard deviation of ", var_name, ":", sd(data), "\n")
+  if (any(is.na(data))) stop("Data contains NA values, please clean the data.")
+  if (sd(data) == 0) stop("Data has zero variance, cannot perform phase space reconstruction.")
+
+  # Calculate standard deviation for parameter setting
+  sd_data <- sd(data)
+  if (is.na(sd_data) || sd_data == 0) sd_data <- (max(data) - min(data)) / 4
+
+  # Step 1: Determine time delay (tau) using ACF and AMI
+  tau_acf <- find_acf_local_min(data, lag.max = 100)
+  plot(acf(data, lag.max = 100, plot = FALSE), type = "h", main = paste("ACF Plot for", var_name))
+  abline(h = 0.2, col = "red", lty = 2)
+
+  tau_ami <- timeLag(data, technique = "ami", lag.max = 100, do.plot = TRUE)
+  if (inherits(tau_ami, "try-error")) tau_ami <- tau_acf + 2
+
+  cat("For ", var_name, ":\n")
+  cat("ACF-based tau:", tau_acf, "\nAMI-based tau:", tau_ami, "\n")
+  cat("We choose AMI-based tau (", tau_ami, ") as it is more suitable for nonlinear systems (Wiltshire, 2025).\n")
+  tau <- tau_ami
+
+  # Step 2: Determine embedding dimension (M) using estimateEmbeddingDim
+  emb_dim <- estimateEmbeddingDim(data, time.lag = tau, max.embedding.dim = 10, do.plot = TRUE)
+  if (is.na(emb_dim)) {
+    cat("Warning: estimateEmbeddingDim returned NA for ", var_name, ". Setting default M = 3.\n")
+    emb_dim <- 3
+  }
+  M <- max(emb_dim, 3)
+  cat("Estimated M for ", var_name, ":", emb_dim, "\n")
+  cat("We choose M =", M, "as it is determined by Cao's method via estimateEmbeddingDim (Cao, 1997).\n")
+
+  # Step 3: Reconstruct phase space
+  takens <- buildTakens(data, embedding.dim = M, time.lag = tau)
+  cat("Dimensions of reconstructed phase space for ", var_name, ":", dim(takens), "\n")
+
+  # Step 4: Visualize the phase space
+  if (ncol(takens) >= 3) {
+    scatterplot3d(takens[, 1], takens[, 2], takens[, 3], 
+                  color.symbols = "blue", 
+                  xlab = paste(var_name, "(t)"), 
+                  ylab = paste(var_name, "(t+tau)"), 
+                  zlab = paste(var_name, "(t+2tau)"), 
+                  main = paste(var_name, "Phase Space"))
+    # Interactive 3D plot
+    plot3d(takens[, 1], takens[, 2], takens[, 3], 
+           col = "blue", size = 0.5, main = paste("Interactive", var_name, "Phase Space"))
+  } else {
+    plot(takens[, 1], takens[, 2], type = "l", col = "blue", 
+         xlab = paste(var_name, "(t)"), ylab = paste(var_name, "(t+tau)"), 
+         main = paste(var_name, "Phase Space (2D)"))
+  }
+
+  # Step 5: Calculate correlation dimension
+  corr_dim_obj <- corrDim(data, min.embedding.dim = M, max.embedding.dim = M, 
+                          time.lag = tau, min.radius = sd_data / 50, 
+                          max.radius = sd_data / 2, n.points = 10)
+  corr_dim <- estimate(corr_dim_obj)
+
+  # Step 6: Surrogate data analysis for robustness
+  set.seed(123)
+  surrogate_data <- sample(data, length(data), replace = FALSE)
+  corr_dim_surrogate_obj <- corrDim(surrogate_data, min.embedding.dim = M, max.embedding.dim = M, 
+                                    time.lag = tau, min.radius = sd_data / 50, 
+                                    max.radius = sd_data / 2, n.points = 10)
+  corr_dim_surrogate <- estimate(corr_dim_surrogate_obj)
+
+  cat("Correlation Dimension for ", var_name, ":", corr_dim, "\n")
+  cat("Correlation Dimension for surrogate data:", corr_dim_surrogate, "\n")
+  cat("If the original correlation dimension is significantly lower than the surrogate, the result is more robust (Module 7).\n")
+
+  return(list(tau = tau, M = M, takens = takens, corr_dim = corr_dim, corr_dim_surrogate = corr_dim_surrogate))
+}
+
+# Perform phase space reconstruction for temperature, humidity, and hive_power
+temp_result <- perform_phase_space_reconstruction(temperature, "Temperature")
+humidity_result <- perform_phase_space_reconstruction(humidity, "Humidity")
+hive_power_result <- perform_phase_space_reconstruction(hive_power, "Hive Power")
+```
+4. Sensitivity Analysis for Temperature, Humidity, and Hive Power
+```{r}
+# Step 4: Sensitivity Analysis for Temperature, Humidity, and Hive Power
+
+# Define ranges for tau and M
+tau_range <- seq(2, 8, by = 2)  # Test tau values: 2, 4, 6, 8
+M_range <- seq(2, 6, by = 2)    # Test M values: 2, 4, 6
+
+# Function to perform sensitivity analysis for a single variable
+perform_sensitivity_analysis <- function(data, var_name, tau_range, M_range) {
+  # Initialize matrices to store correlation dimensions
+  results <- matrix(NA, nrow = length(tau_range), ncol = length(M_range))
+  results_surrogate <- matrix(NA, nrow = length(tau_range), ncol = length(M_range))
+  
+  # Calculate standard deviation for parameter setting
+  sd_data <- sd(data)
+  if (is.na(sd_data) || sd_data == 0) sd_data <- (max(data) - min(data)) / 4
+
+  # Loop over tau and M values
+  for (i in 1:length(tau_range)) {
+    for (j in 1:length(M_range)) {
+      # Reconstruct phase space with current tau and M (original data)
+      takens <- buildTakens(data, embedding.dim = M_range[j], time.lag = tau_range[i])
+      
+      # Calculate correlation dimension (original data)
+      corr_dim_obj <- corrDim(data, min.embedding.dim = M_range[j], max.embedding.dim = M_range[j], 
+                              time.lag = tau_range[i], min.radius = sd_data / 50, 
+                              max.radius = sd_data / 2, n.points = 10)
+      corr_dim <- estimate(corr_dim_obj)
+      results[i, j] <- ifelse(inherits(corr_dim, "try-error"), NA, corr_dim)
+
+      # Calculate correlation dimension for surrogate data
+      set.seed(123)
+      surrogate_data <- sample(data, length(data), replace = FALSE)
+      takens_surrogate <- buildTakens(surrogate_data, embedding.dim = M_range[j], time.lag = tau_range[i])
+      corr_dim_surrogate_obj <- corrDim(surrogate_data, min.embedding.dim = M_range[j], max.embedding.dim = M_range[j], 
+                                        time.lag = tau_range[i], min.radius = sd_data / 50, 
+                                        max.radius = sd_data / 2, n.points = 10)
+      corr_dim_surrogate <- estimate(corr_dim_surrogate_obj)
+      results_surrogate[i, j] <- ifelse(inherits(corr_dim_surrogate, "try-error"), NA, corr_dim_surrogate)
+    }
+  }
+
+  # Print the results matrices for analysis
+  cat("Correlation Dimension Sensitivity for ", var_name, " (Original Data):\n")
+  cat("Rows: tau =", tau_range, "\n")
+  cat("Columns: M =", M_range, "\n")
+  print(results)
+  cat("\n")
+
+  cat("Correlation Dimension Sensitivity for ", var_name, " (Surrogate Data):\n")
+  cat("Rows: tau =", tau_range, "\n")
+  cat("Columns: M =", M_range, "\n")
+  print(results_surrogate)
+  cat("\n")
+
+  # Plot sensitivity analysis as heatmaps with a color palette
+  # Original data
+  heatmap(results, Rowv = NA, Colv = NA, xlab = "Embedding Dimension (M)", 
+          ylab = "Time Delay (tau)", main = paste(var_name, "Corr. Dim. Sensitivity (Original)"), 
+          col = colorRampPalette(c("lightblue", "blue", "darkblue"))(100))
+  
+  # Surrogate data
+  heatmap(results_surrogate, Rowv = NA, Colv = NA, xlab = "Embedding Dimension (M)", 
+          ylab = "Time Delay (tau)", main = paste(var_name, "Corr. Dim. Sensitivity (Surrogate)"), 
+          col = colorRampPalette(c("lightblue", "blue", "darkblue"))(100))
+
+  return(list(original = results, surrogate = results_surrogate))
+}
+
+# Perform sensitivity analysis for each variable
+temp_sensitivity <- perform_sensitivity_analysis(temperature, "Temperature", tau_range, M_range)
+humidity_sensitivity <- perform_sensitivity_analysis(humidity, "Humidity", tau_range, M_range)
+hive_power_sensitivity <- perform_sensitivity_analysis(hive_power, "Hive Power", tau_range, M_range)
+```
+
+phase space reconstruction with specific 
+```{r}
+# Function to perform phase space reconstruction with specified tau and M
+perform_phase_space_reconstruction <- function(data, var_name, tau, M) {
+  # Step 1: Check data characteristics
+  cat("Summary of ", var_name, " data:\n")
+  print(summary(data))
+  cat("Standard deviation of ", var_name, ":", sd(data), "\n")
+  cat("Variance of ", var_name, ":", var(data), "\n")
+  if (any(is.na(data))) stop("Data contains NA values, please clean the data.")
+  if (sd(data) == 0) stop("Data has zero variance, cannot perform phase space reconstruction.")
+
+  # Plot the time series to inspect its behavior
+  plot(data, type = "l", col = "green", xlab = "Time", ylab = paste(var_name), 
+       main = paste("Time Series of", var_name))
+
+  # Plot histogram to inspect distribution
+  hist(data, breaks = 30, col = "lightgreen", xlab = paste(var_name), 
+       main = paste("Histogram of", var_name))
+
+  # Calculate standard deviation for parameter setting
+  sd_data <- sd(data)
+  if (is.na(sd_data) || sd_data == 0) sd_data <- (max(data) - min(data)) / 4
+
+  # Step 2: Use specified tau and M
+  cat("Using specified tau =", tau, "and M =", M, "for", var_name, "\n")
+
+  # Step 3: Reconstruct phase space
+  takens <- buildTakens(data, embedding.dim = M, time.lag = tau)
+  cat("Dimensions of reconstructed phase space for ", var_name, ":", dim(takens), "\n")
+
+  # Step 4: Visualize the phase space
+  if (ncol(takens) >= 3) {
+    scatterplot3d(takens[, 1], takens[, 2], takens[, 3], 
+                  color = "blue", 
+                  xlab = paste(var_name, "(t)"), 
+                  ylab = paste(var_name, "(t+tau)"), 
+                  zlab = paste(var_name, "(t+2tau)"), 
+                  main = paste(var_name, "Phase Space"))
+    # Interactive 3D plot
+    plot3d(takens[, 1], takens[, 2], takens[, 3], 
+           col = "blue", size = 0.5, main = paste("Interactive", var_name, "Phase Space"))
+  } else {
+    plot(takens[, 1], takens[, 2], type = "l", col = "blue", 
+         xlab = paste(var_name, "(t)"), ylab = paste(var_name, "(t+tau)"), 
+         main = paste(var_name, "Phase Space (2D)"))
+  }
+
+  # Step 5: Calculate correlation dimension
+  corr_dim_obj <- corrDim(data, min.embedding.dim = M, max.embedding.dim = M, 
+                          time.lag = tau, min.radius = sd_data / 50, 
+                          max.radius = sd_data / 2, n.points = 10)
+  corr_dim <- estimate(corr_dim_obj)
+
+  # Step 6: Surrogate data analysis for robustness
+  set.seed(123)
+  surrogate_data <- sample(data, length(data), replace = FALSE)
+  corr_dim_surrogate_obj <- corrDim(surrogate_data, min.embedding.dim = M, max.embedding.dim = M, 
+                                    time.lag = tau, min.radius = sd_data / 50, 
+                                    max.radius = sd_data / 2, n.points = 10)
+  corr_dim_surrogate <- estimate(corr_dim_surrogate_obj)
+
+  # Step 7: Print results
+  cat("Results for ", var_name, ":\n")
+  cat("Tau =", tau, "\n")
+  cat("M =", M, "\n")
+  cat("Correlation Dimension =", corr_dim, "\n")
+  cat("Correlation Dimension (Surrogate) =", corr_dim_surrogate, "\n")
+  cat("If the original correlation dimension is significantly lower than the surrogate, the result is more robust (Module 7).\n")
+  cat("\n")
+
+  return(list(tau = tau, M = M, takens = takens, corr_dim = corr_dim, corr_dim_surrogate = corr_dim_surrogate))
+}
+
+# Perform phase space reconstruction with recommended parameters
+temp_result <- perform_phase_space_reconstruction(temperature, "Temperature", tau = 2, M = 6)
+humidity_result <- perform_phase_space_reconstruction(humidity, "Humidity", tau = 2, M = 2)
+hive_power_result <- perform_phase_space_reconstruction(hive_power, "Hive Power", tau = 2, M = 2)
+```
+3D-plot for hive_power
+```{r}
+# Required packages (ensure these are loaded)
+library(nonlinearTseries)
+library(scatterplot3d)
+library(rgl)
+
+# Step 1: Recompute tau for hive_power using ACF to find periodicity
+acf_hive_power <- acf(hive_power, lag.max = 1440, plot = FALSE)  # Assuming 1440 points per day (24 hours)
+acf_peaks <- which(diff(sign(diff(acf_hive_power$acf))) == -2) + 1  # Find peaks in ACF
+if (length(acf_peaks) > 0) {
+  tau_periodic <- acf_peaks[1]  # Take the first peak as the period
+} else {
+  tau_periodic <- 360  # Default to 360 if no clear period
+}
+cat("Estimated period (tau) from ACF for Hive Power:", tau_periodic, "\n")
+
+# Step 2: Reconstruct phase space for hive_power with tau = 360, M = 3
+tau <- 360  # 6-hour intervals, assuming 1440 points per day
+M <- 3      # 3D plot to better visualize periodicity
+takens <- buildTakens(hive_power, embedding.dim = M, time.lag = tau)
+cat("Dimensions of reconstructed phase space for Hive Power:", dim(takens), "\n")
+
+# Step 3: Visualize the phase space
+# 3D plot with lines
+scatterplot3d(takens[, 1], takens[, 2], takens[, 3], 
+              color = "blue", type = "l",  # Use lines to show trajectory
+              xlab = "Hive Power(t)", 
+              ylab = "Hive Power(t+tau)", 
+              zlab = "Hive Power(t+2tau)", 
+              main = "Hive Power Phase Space (tau = 360, M = 3)")
+
+# Interactive 3D plot
+plot3d(takens[, 1], takens[, 2], takens[, 3], 
+       col = "blue", size = 0.5, main = "Interactive Hive Power Phase Space (tau = 360, M = 3)")
+
+# Interactive 3D plot with a subset of points to reduce overlap
+plot3d(takens[1:200, 1], takens[1:200, 2], takens[1:200, 3], 
+       col = "blue", size = 0.5, main = "Interactive Hive Power Phase Space (First 200 Points, tau = 360, M = 3)")
+```
+
+
+```{r}
+# Step 5: Save Results for Temperature, Humidity, and Hive Power
+
+# Create a data frame with results
+results_table <- data.frame(
+  Metric = c("Tau (Temperature)", "Tau (Humidity)", "Tau (Hive Power)",
+             "M (Temperature)", "M (Humidity)", "M (Hive Power)",
+             "Corr. Dim. (Temperature)", "Corr. Dim. (Humidity)", "Corr. Dim. (Hive Power)",
+             "Corr. Dim. (Temp Surrogate)", "Corr. Dim. (Humidity Surrogate)", "Corr. Dim. (Hive Power Surrogate)"),
+  Value = c(temp_result$tau, humidity_result$tau, hive_power_result$tau,
+            temp_result$M, humidity_result$M, hive_power_result$M,
+            temp_result$corr_dim, humidity_result$corr_dim, hive_power_result$corr_dim,
+            temp_result$corr_dim_surrogate, humidity_result$corr_dim_surrogate, hive_power_result$corr_dim_surrogate)
+)
+
+# Add a note about humidity data
+cat("Note: These results use recommended parameters from sensitivity analysis.\n")
+cat("Humidity's previous high correlation dimension (7.530213) suggested noise; using tau = 2, M = 2 may provide a more accurate estimate.\n")
+
+# Save to CSV
+write.csv(results_table, "single_variable_phase_space_results_updated.csv", row.names = FALSE)
+
+# Print the results table for reference
+cat("Results Table:\n")
+print(results_table)
+```
+
+
+```{r}
+
+```
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
