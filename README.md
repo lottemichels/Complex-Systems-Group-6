@@ -7,7 +7,7 @@ Project contributers and their executed tasks:
 * **Jacuqot Qiu**: writing Module 4, revising Module 12
 * **Lotte Michels**: finding dataset and related literature, data exploration, writing Module 2, writing Module 7, writing DTW Novelty aspect for Module 8, revising Module 6, revising Module 8, managing the Github repository, writing meeting minutes, combining all work and handling submissions
 * **Nawat Nawati Azhati**: data exploration, writing Module 6, partly writing Module 12, revising Module 5, revising Module 8 
-* **Nuo Xu**: writing Module 5, partly writing Module 12, revising Module 4 ???
+* **Nuo Xu**: writing Module 5, partly writing Module 12, revising Module 4
 * **Xuelin Wei**: writing Module 8 (without DTW)
 
 
